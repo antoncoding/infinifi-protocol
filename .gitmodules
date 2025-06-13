@@ -3,7 +3,13 @@
 	url = https://github.com/foundry-rs/forge-std
 [submodule "lib/openzeppelin-contracts"]
 	path = lib/openzeppelin-contracts
-	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+	url = https://github.com/openzeppelin/openzeppelin-contracts
 [submodule "lib/solmate"]
 	path = lib/solmate
-	url = https://github.com/transmissions11/solmate.git
+	url = https://github.com/transmissions11/solmate
+[submodule "lib/cowprotocol"]
+	path = lib/cowprotocol
+	url = https://github.com/cowprotocol/contracts
+[submodule "lib/contracts"]
+	path = lib/contracts
+	url = https://github.com/cowprotocol/contracts
