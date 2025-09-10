@@ -11,8 +11,10 @@ import {FarmTypes} from "@libraries/FarmTypes.sol";
 import {FarmRegistry} from "@integrations/FarmRegistry.sol";
 import {IMaturityFarm} from "@interfaces/IMaturityFarm.sol";
 import {CoreControlled} from "@core/CoreControlled.sol";
-import {LockingController} from "@locking/LockingController.sol";
 import {LockedPositionToken} from "@tokens/LockedPositionToken.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
 
 /// @notice AllocationVotingPrivateGroups voting contract
 /// In this contract, verified users in a semaphore group can cast a vote
@@ -25,9 +27,10 @@ import {LockedPositionToken} from "@tokens/LockedPositionToken.sol";
 /// to cast their votes. Votes should be performed every week, or they will be considered outdated.
 /// This means that a farm with 0 votes on a given epoch will not persist its weight on the next
 /// epoch, its weight will become 0 on the next epoch.
-contract AllocationVotingPrivateGroups is CoreControlled {
+contract AllocationVotingPrivateGroups is Ownable {
     using EpochLib for uint256;
     using FixedPointMathLib for uint256;
+    using EnumerableSet for EnumerableSet.UintSet;
 
     error InvalidAsset(address _asset);
     error AlreadyVoted(address _user, uint32 _unwindingEpochs);
@@ -39,7 +42,7 @@ contract AllocationVotingPrivateGroups is CoreControlled {
     event FarmVoteRegistered(
         uint256 indexed timestamp,
         uint256 indexed epoch,
-        address indexed user,
+        uint256 indexed nullifier,
         uint32 unwindingEpochs,
         AllocationVote[] liquidVotes,
         AllocationVote[] illiquidVotes,
@@ -61,19 +64,19 @@ contract AllocationVotingPrivateGroups is CoreControlled {
         uint112 nextWeight;
     }
 
-    address public lockingController;
-    address public farmRegistry;
-
     // semaphore address
     ISemaphore public immutable semaphore;
 
     mapping(address farm => FarmWeightData) public farmWeightData;
     mapping(address user => mapping(uint32 unwindingEpochs => uint32 epoch)) public lastVoteEpoch;
 
-    constructor(address _core, address _lockingController, address _farmRegistry, address _semaphore) CoreControlled(_core) {
-        lockingController = _lockingController;
-        farmRegistry = _farmRegistry;
-        semaphore = _semaphore;
+    /// @dev weight of each Semaphore Group
+    mapping(uint256 groupId => uint256 weight) public groupWeights;
+
+    EnumerableSet.UintSet private groupIds;
+
+    constructor(address _semaphore, address _votoCoordinator) Ownable(_votoCoordinator) {
+        semaphore = ISemaphore(_semaphore);
     }
 
     /// @notice Returns the weight of the farm for the given epoch
@@ -84,24 +87,11 @@ contract AllocationVotingPrivateGroups is CoreControlled {
     }
 
     /// @notice Returns the vote weights for the given farm type (liquid or illiquid)
-    /// @param _farmType Determine for which farm type subset to return votes for
-    /// @return address[] farms
     /// @return uint256[] farms percentage
     /// @return uint256 total power
-    function getVoteWeights(uint256 _farmType) external view returns (address[] memory, uint256[] memory, uint256) {
-        address[] memory farms = FarmRegistry(farmRegistry).getTypeFarms(_farmType);
-        (uint256[] memory weights, uint256 totalPower) = _getVoteWeights(farms);
-        return (farms, weights, totalPower);
-    }
-
-    function getAssetVoteWeights(address _asset, uint256 _farmType)
-        external
-        view
-        returns (address[] memory, uint256[] memory, uint256)
-    {
-        address[] memory farms = FarmRegistry(farmRegistry).getAssetTypeFarms(_asset, _farmType);
-        (uint256[] memory weights, uint256 totalPower) = _getVoteWeights(farms);
-        return (farms, weights, totalPower);
+    function getVoteWeights(address[] calldata _farms) external view returns (uint256[] memory, uint256) {
+        (uint256[] memory weights, uint256 totalPower) = _getVoteWeights(_farms);
+        return (weights, totalPower);
     }
 
     /// @notice Casts a vote for the given farm
@@ -109,24 +99,31 @@ contract AllocationVotingPrivateGroups is CoreControlled {
     /// @param _unwindingEpochs The number of epochs to unwind of the user
     /// @param _liquidVotes The liquid votes
     /// @param _illiquidVotes The illiquid votes
+    /// @param _proof ISemaphore Proof 
+    /// _proof.merkleTreeDepth;
+    /// _proof.merkleTreeRoot;  Semaphore merkleTreeRoot
+    /// _proof.nullifier;       Identity + Scope, to prevent double voting. Can be used as identifier for "voter"
+    /// _proof.message:         Hash of the liquidVotes and illiquidVote result
+    /// _proof.scope:           Should be the same as epoch
+    /// _proof.points;          Proofs
     function vote(
-        address _user,
         address _asset,
+        uint256 _groupId,
         uint32 _unwindingEpochs,
         AllocationVote[] calldata _liquidVotes,
-        AllocationVote[] calldata _illiquidVotes
-    ) external whenNotPaused onlyCoreRole(CoreRoles.ENTRY_POINT) {
-        require(FarmRegistry(farmRegistry).isAssetEnabled(_asset), InvalidAsset(_asset));
-
+        AllocationVote[] calldata _illiquidVotes,
+        ISemaphore.SemaphoreProof calldata _proof
+    ) external onlyOwner {
         uint32 epoch = uint32(block.timestamp.epoch());
-      
-        // Check: No double voting
-        require(lastVoteEpoch[_user][_unwindingEpochs] < epoch, AlreadyVoted(_user, _unwindingEpochs));
-        lastVoteEpoch[_user][_unwindingEpochs] = epoch;
 
+        require(epoch == _proof.scope, "Wong Epoch");
+
+        // Check: No double voting: Checked with ISemaphore.validateProof
+        semaphore.validateProof(_groupId, _proof);
+      
         // Check: Get Voting weight
-        uint256 weight = LockingController(lockingController).rewardWeightForUnwindingEpochs(_user, _unwindingEpochs);
-        require(weight > 0, NoVotingPower(_user, _unwindingEpochs));
+        uint256 weight = groupWeights[_groupId];
+        require(weight > 0, "Invalid Group");
 
       	// Update votes
         if (_illiquidVotes.length > 0) {
@@ -136,11 +133,28 @@ contract AllocationVotingPrivateGroups is CoreControlled {
             _storeUserVotes(_asset, _unwindingEpochs, epoch, weight, _liquidVotes, true);
         }
 
-        // Restrict transfer until the next epoch after voting
-        address shareToken = LockingController(lockingController).shareToken(_unwindingEpochs);
-        LockedPositionToken(shareToken).restrictTransferUntilNextEpoch(_user);
+        // Restrict transfer: checked offchain
 
-        emit FarmVoteRegistered(block.timestamp, epoch, _user, _unwindingEpochs, _liquidVotes, _illiquidVotes, weight);
+        emit FarmVoteRegistered(block.timestamp, epoch, _proof.nullifier, _unwindingEpochs, _liquidVotes, _illiquidVotes, weight);
+    }
+
+
+    function createGroupWithWeight(uint256 weight) onlyOwner external {
+        uint256 groupId = semaphore.createGroup();
+
+        groupWeights[groupId] = weight;
+
+        groupIds.add(groupId);
+    }
+
+    function getGroupIds() external view returns (uint256[] memory){
+        return groupIds.values();
+    }
+
+    /// @notice add member to the group
+    /// @dev only admin can call this function
+    function addMember(uint256 groupId, uint256 identityCommitment) onlyOwner external {
+        semaphore.addMember(groupId, identityCommitment);
     }
 
     /// -----------------------------------------------------------------------------------------------
@@ -229,9 +243,12 @@ contract AllocationVotingPrivateGroups is CoreControlled {
     }
 
     function _validateAssetAndType(address _asset, address _farm, uint256 _type) internal view {
-        FarmRegistry _farmRegistry = FarmRegistry(farmRegistry);
-        require(_farmRegistry.isFarmOfType(_farm, uint256(_type)), UnknownFarm(_farm, true));
-        require(_farmRegistry.isFarmOfAsset(_farm, _asset), InvalidAsset(_asset));
+        // No validation
+        // return true;
+
+        // FarmRegistry _farmRegistry = FarmRegistry(farmRegistry);
+        // require(_farmRegistry.isFarmOfType(_farm, uint256(_type)), UnknownFarm(_farm, true));
+        // require(_farmRegistry.isFarmOfAsset(_farm, _asset), InvalidAsset(_asset));
     }
 
     function _validateFarmBucket(address _farm, uint32 _unwindingEpochs) internal view {

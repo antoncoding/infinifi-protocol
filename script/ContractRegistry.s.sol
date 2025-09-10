@@ -7,6 +7,7 @@ import {YieldSharing} from "@finance/YieldSharing.sol";
 
 /// Governance
 import {AllocationVoting} from "@governance/AllocationVoting.sol";
+import {AllocationVotingPrivateGroups} from "@governance/AllocationVotingPrivateGroups.sol";
 
 /// Integrations
 import {FarmRegistry} from "@integrations/FarmRegistry.sol";
@@ -41,6 +42,7 @@ abstract contract ContractRegistry {
     ManualRebalancer public manualRebalancer;
     UnwindingModule public unwindingModule;
     AllocationVoting public allocationVoting;
+    AllocationVotingPrivateGroups public allocationVotingPrivate;
     FixedPriceOracle public collateralOracle;
     FixedPriceOracle public receiptTokenOracle;
     LockingController public lockingController;

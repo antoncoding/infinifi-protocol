@@ -12,6 +12,7 @@ optimizer_runs = 400
 remappings = []
 rpc_storage_caching = { chains = "all", endpoints = "all" }
 fs_permissions = [{ access = "read-write", path = "./deployment/configuration"}]
+script_execution_protection = false
 
 [fmt]
 line_length = 120
