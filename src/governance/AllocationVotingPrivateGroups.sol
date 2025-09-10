@@ -119,12 +119,16 @@ contract AllocationVotingPrivateGroups is CoreControlled {
         require(FarmRegistry(farmRegistry).isAssetEnabled(_asset), InvalidAsset(_asset));
 
         uint32 epoch = uint32(block.timestamp.epoch());
+      
+        // Check: No double voting
         require(lastVoteEpoch[_user][_unwindingEpochs] < epoch, AlreadyVoted(_user, _unwindingEpochs));
         lastVoteEpoch[_user][_unwindingEpochs] = epoch;
 
+        // Check: Get Voting weight
         uint256 weight = LockingController(lockingController).rewardWeightForUnwindingEpochs(_user, _unwindingEpochs);
         require(weight > 0, NoVotingPower(_user, _unwindingEpochs));
 
+      	// Update votes
         if (_illiquidVotes.length > 0) {
             _storeUserVotes(_asset, _unwindingEpochs, epoch, weight, _illiquidVotes, false);
         }
@@ -132,7 +136,7 @@ contract AllocationVotingPrivateGroups is CoreControlled {
             _storeUserVotes(_asset, _unwindingEpochs, epoch, weight, _liquidVotes, true);
         }
 
-        // restrict transfer until the next epoch after voting
+        // Restrict transfer until the next epoch after voting
         address shareToken = LockingController(lockingController).shareToken(_unwindingEpochs);
         LockedPositionToken(shareToken).restrictTransferUntilNextEpoch(_user);
 
