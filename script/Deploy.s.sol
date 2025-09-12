@@ -151,12 +151,6 @@ contract Deploy is Config, VerboseDeployment, ContractRegistry {
         allocationVoting = new AllocationVoting(address(core), address(lockingController), address(farmRegistry));
         core.grantRole(CoreRoles.TRANSFER_RESTRICTOR, address(allocationVoting));
         json = vm.serializeAddress("root", "allocationVoting", address(allocationVoting));
-
-        address coordinator = 0xB220d6Fb28898015dBDDE2D53DA248Cb88444507;
-        address semaphore = 0x8A1fd199516489B0Fb7153EB5f075cDAC83c693D;
-        allocationVotingPrivate = new AllocationVotingPrivateGroups(semaphore, coordinator);
-        core.grantRole(CoreRoles.TRANSFER_RESTRICTOR, address(allocationVotingPrivate));
-        json = vm.serializeAddress("root", "allocationVotingPrivate", address(allocationVotingPrivate));
         return this;
     }
 

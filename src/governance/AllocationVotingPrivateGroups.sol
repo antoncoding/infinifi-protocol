@@ -14,6 +14,7 @@ import {CoreControlled} from "@core/CoreControlled.sol";
 import {LockedPositionToken} from "@tokens/LockedPositionToken.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 
 /// @notice AllocationVotingPrivateGroups voting contract
@@ -67,16 +68,20 @@ contract AllocationVotingPrivateGroups is Ownable {
     // semaphore address
     ISemaphore public immutable semaphore;
 
+    IERC20 public immutable lockedToken;
+
     mapping(address farm => FarmWeightData) public farmWeightData;
     mapping(address user => mapping(uint32 unwindingEpochs => uint32 epoch)) public lastVoteEpoch;
+    mapping(uint256 commitment => address user) public semaphoreCommitmentToUser;
 
     /// @dev weight of each Semaphore Group
     mapping(uint256 groupId => uint256 weight) public groupWeights;
 
     EnumerableSet.UintSet private groupIds;
 
-    constructor(address _semaphore, address _votoCoordinator) Ownable(_votoCoordinator) {
+    constructor(address _semaphore, address _votoCoordinator, address _lockedToken) Ownable(_votoCoordinator) {
         semaphore = ISemaphore(_semaphore);
+        lockedToken = IERC20(_lockedToken);
     }
 
     /// @notice Returns the weight of the farm for the given epoch
@@ -113,7 +118,7 @@ contract AllocationVotingPrivateGroups is Ownable {
         AllocationVote[] calldata _liquidVotes,
         AllocationVote[] calldata _illiquidVotes,
         ISemaphore.SemaphoreProof calldata _proof
-    ) external onlyOwner {
+    ) external {
         uint32 epoch = uint32(block.timestamp.epoch());
 
         require(epoch == _proof.scope, "Wong Epoch");
@@ -133,12 +138,23 @@ contract AllocationVotingPrivateGroups is Ownable {
             _storeUserVotes(_asset, _unwindingEpochs, epoch, weight, _liquidVotes, true);
         }
 
-        // Restrict transfer: checked offchain
+        // Check: Verify the hash of the vote is the message signed by the voter
+        // bytes32 voteHash = keccak256(
+        //     abi.encode(
+        //         keccak256(abi.encodePacked(_liquidVotes)),
+        //         keccak256(abi.encodePacked(_illiquidVotes))
+        //     )
+        //     );
+
+        // require(voteHash == _proof.message, "Hash mismatch");
 
         emit FarmVoteRegistered(block.timestamp, epoch, _proof.nullifier, _unwindingEpochs, _liquidVotes, _illiquidVotes, weight);
     }
 
 
+    /**
+     * Owner can create group with weights
+     */
     function createGroupWithWeight(uint256 weight) onlyOwner external {
         uint256 groupId = semaphore.createGroup();
 
@@ -151,10 +167,29 @@ contract AllocationVotingPrivateGroups is Ownable {
         return groupIds.values();
     }
 
-    /// @notice add member to the group
-    /// @dev only admin can call this function
-    function addMember(uint256 groupId, uint256 identityCommitment) onlyOwner external {
+    /// @notice Join a group
+    /// @dev user must have at least x token 
+    function addMember(uint256 groupId, uint256 identityCommitment) external {
+
+        uint256 balance = lockedToken.balanceOf(msg.sender);
+        uint256 limit = groupWeights[groupId] / 1e12;
+        require(limit > 0 && balance > limit, "Not enough token");
+
+        semaphoreCommitmentToUser[identityCommitment] = msg.sender;
+
         semaphore.addMember(groupId, identityCommitment);
+    }
+
+    /// @notice Anyone can remove a member if they no longer have enough balance
+    function removeMember(uint256 groupId, uint256 identityCommitment, address user, uint256[] calldata merkleProofSiblings) external {
+
+        require(semaphoreCommitmentToUser[identityCommitment] == user, "user commitment mismatch");
+
+        uint256 balance = lockedToken.balanceOf(user);
+        uint256 limit = groupWeights[groupId] / 1e12;
+        require(balance < limit, "valid vote");
+
+        semaphore.removeMember(groupId, identityCommitment, merkleProofSiblings);
     }
 
     /// -----------------------------------------------------------------------------------------------
@@ -252,8 +287,8 @@ contract AllocationVotingPrivateGroups is Ownable {
     }
 
     function _validateFarmBucket(address _farm, uint32 _unwindingEpochs) internal view {
-        uint256 maturity = IMaturityFarm(_farm).maturity();
-        uint256 userUnwindingTimestamp = (block.timestamp.nextEpoch() + _unwindingEpochs).epochToTimestamp();
-        require(maturity <= userUnwindingTimestamp, InvalidTargetBucket(_farm, maturity, userUnwindingTimestamp));
+        // uint256 maturity = IMaturityFarm(_farm).maturity();
+        // uint256 userUnwindingTimestamp = (block.timestamp.nextEpoch() + _unwindingEpochs).epochToTimestamp();
+        // require(maturity <= userUnwindingTimestamp, InvalidTargetBucket(_farm, maturity, userUnwindingTimestamp));
     }
 }
