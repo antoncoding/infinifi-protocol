@@ -139,16 +139,39 @@ contract AllocationVotingPrivateGroups is Ownable {
         }
 
         // Check: Verify the hash of the vote is the message signed by the voter
-        // bytes32 voteHash = keccak256(
-        //     abi.encode(
-        //         keccak256(abi.encodePacked(_liquidVotes)),
-        //         keccak256(abi.encodePacked(_illiquidVotes))
-        //     )
-        //     );
-
-        // require(voteHash == _proof.message, "Hash mismatch");
+        uint256 voteHash = hashVotes(_liquidVotes, _illiquidVotes);
+        require(voteHash == _proof.message, "Hash mismatch");
 
         emit FarmVoteRegistered(block.timestamp, epoch, _proof.nullifier, _unwindingEpochs, _liquidVotes, _illiquidVotes, weight);
+    }
+
+    function hashVotes(AllocationVote[] memory _liquidVotes, AllocationVote[] memory _illiquidVotes) public view returns (uint256) {
+        uint256 len = _liquidVotes.length + _illiquidVotes.length;
+        uint256[] memory weights = new uint256[](len);
+        address[] memory farms = new address[](len);
+        uint256 i;
+        for (; i< _liquidVotes.length;) {
+
+            weights[i] = _liquidVotes[i].weight;
+            farms[i] = _liquidVotes[i].farm;
+
+            unchecked {
+                ++i;
+            }
+        }
+        for(uint256 j = 0; j<_illiquidVotes.length; ) {
+            weights[i+j] = _liquidVotes[j].weight;
+            farms[i+j] = _liquidVotes[j].farm;
+
+            unchecked {
+                ++j;
+            }
+        }
+
+        return uint256(keccak256(abi.encode(
+            keccak256(abi.encodePacked(weights)),
+            keccak256(abi.encodePacked(farms))
+        )));
     }
 
 
