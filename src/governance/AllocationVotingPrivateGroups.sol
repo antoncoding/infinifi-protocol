@@ -72,7 +72,7 @@ contract AllocationVotingPrivateGroups is Ownable {
 
     mapping(address farm => FarmWeightData) public farmWeightData;
     mapping(address user => mapping(uint32 unwindingEpochs => uint32 epoch)) public lastVoteEpoch;
-    mapping(uint256 commitment => address user) public semaphoreCommitmentToUser;
+    mapping(address user => uint256 commitment) public userToSemaphoreCommitment;
 
     /// @dev weight of each Semaphore Group
     mapping(uint256 groupId => uint256 weight) public groupWeights;
@@ -171,11 +171,13 @@ contract AllocationVotingPrivateGroups is Ownable {
     /// @dev user must have at least x token 
     function addMember(uint256 groupId, uint256 identityCommitment) external {
 
+        require(userToSemaphoreCommitment[msg.sender] == 0, "already have one commitment");
+
         uint256 balance = lockedToken.balanceOf(msg.sender);
         uint256 limit = groupWeights[groupId] / 1e12;
         require(limit > 0 && balance > limit, "Not enough token");
 
-        semaphoreCommitmentToUser[identityCommitment] = msg.sender;
+        userToSemaphoreCommitment[msg.sender] = identityCommitment;
 
         semaphore.addMember(groupId, identityCommitment);
     }
@@ -183,11 +185,15 @@ contract AllocationVotingPrivateGroups is Ownable {
     /// @notice Anyone can remove a member if they no longer have enough balance
     function removeMember(uint256 groupId, uint256 identityCommitment, address user, uint256[] calldata merkleProofSiblings) external {
 
-        require(semaphoreCommitmentToUser[identityCommitment] == user, "user commitment mismatch");
+        require(userToSemaphoreCommitment[user] == identityCommitment, "user commitment mismatch");
 
-        uint256 balance = lockedToken.balanceOf(user);
-        uint256 limit = groupWeights[groupId] / 1e12;
-        require(balance < limit, "valid vote");
+        if (msg.sender != user) {
+            uint256 balance = lockedToken.balanceOf(user);
+            uint256 limit = groupWeights[groupId] / 1e12;
+            require(balance < limit, "valid vote");
+        }
+
+        userToSemaphoreCommitment[msg.sender] = 0;
 
         semaphore.removeMember(groupId, identityCommitment, merkleProofSiblings);
     }
